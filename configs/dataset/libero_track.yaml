@@ -1,0 +1,28 @@
+_target_: datasets.robot_tracker.JOPATTrackDataset
+name: libero_track
+rollout_name: libero_track
+hdf5_path_globs: ${oc.env:LIBERO_HDF5_GLOB}
+buffer_path: ${oc.env:JOPAT_CACHE_DIR,./data/cache}/libero_episodes.zarr
+subepisode_buffer_path: ${oc.env:JOPAT_CACHE_DIR,./data/cache}/libero_tracks.zarr
+cotracker_checkpoint: ${oc.env:COTRACKER_CHECKPOINT}
+shape_meta:
+  obs:
+    agentview_rgb: &camera
+      shape: [128, 128, 3]
+      type: rgb
+    eye_in_hand_rgb: *camera
+  action:
+    shape: [7]
+  track:
+    shape: [625, 2]
+  track_visibility:
+    shape: [625]
+seq_len: ${num_frames}
+val_ratio: 0.05
+subsample_ratio: 1.0
+flip_rgb: true
+grid_size: 25
+window_len: 19
+cotracker_batch_size: 64
+stride: 1
+use_language: false

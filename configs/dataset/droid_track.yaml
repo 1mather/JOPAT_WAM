@@ -1,0 +1,34 @@
+_target_: datasets.droid.dataset_track.DroidTrackDataset
+name: droid_track
+buffer_path: ${oc.env:DROID_BUFFER_PATH}
+subepisode_buffer_path: ${oc.env:JOPAT_CACHE_DIR,./data/cache}/droid_tracks.zarr
+cotracker_checkpoint: ${oc.env:COTRACKER_CHECKPOINT}
+shape_meta:
+  obs:
+    exterior_image_1_left: &camera
+      shape: [180, 320, 3]
+      type: rgb
+    exterior_image_2_left: *camera
+    wrist_image_left: *camera
+    cartesian_position:
+      shape: [6]
+      type: low_dim
+    gripper_position:
+      shape: [1]
+      type: low_dim
+  action:
+    shape: [10]
+  track:
+    shape: [625, 2]
+  track_visibility:
+    shape: [625]
+seq_len: ${num_frames}
+history_len: ${obs_num_frames}
+normalize_action: true
+normalize_lowdim: true
+val_ratio: 0.05
+grid_size: 25
+window_len: 19
+cotracker_batch_size: 64
+stride: 1
+obs_num_frames: ${obs_num_frames}

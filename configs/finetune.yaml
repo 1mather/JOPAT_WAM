@@ -1,0 +1,11 @@
+defaults:
+  - train
+  - _self_
+
+num_steps: 20000
+pretrain_checkpoint_path: ${oc.env:JOPAT_PRETRAIN_CHECKPOINT,null}
+
+scheduler:
+  name: cosine
+  num_training_steps: ${num_steps}
+  num_warmup_steps: 1000

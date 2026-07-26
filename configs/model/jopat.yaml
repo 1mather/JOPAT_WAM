@@ -1,0 +1,37 @@
+_target_: models.jopat.JOPAT
+action_len: 16
+action_dim: ${dataset.shape_meta.action.shape[0]}
+track_len: 19
+num_points: 625
+obs_encoder:
+  _target_: models.jopat.JOPATObservationEncoder
+  shape_meta: ${dataset.shape_meta}
+  num_frames: ${obs_num_frames}
+  embed_dim: 768
+  resize_shape: [240, 240]
+  crop_shape: [224, 224]
+  random_crop: true
+  color_jitter:
+    brightness: 0.2
+    contrast: 0.2
+    saturation: 0.2
+    hue: [-0.2, 0.2]
+  imagenet_norm: false
+  vision_backbone: resnet
+  use_low_dim: false
+  use_language: false
+embed_dim: 768
+timestep_embed_dim: 512
+latent_patch_shape: [2, 4, 4]
+depth: 12
+num_heads: 12
+mlp_ratio: 4
+qkv_bias: true
+num_registers: 24
+num_train_steps: 100
+num_inference_steps: 10
+beta_schedule: squaredcos_cap_v2
+clip_sample: true
+use_track_visibility: false
+coord_loss_weight: 1.0
+vis_loss_weight: 0.5

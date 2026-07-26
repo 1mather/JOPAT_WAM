@@ -1,0 +1,13 @@
+defaults:
+  - train
+  - _self_
+
+checkpoint_path: ${oc.env:JOPAT_CHECKPOINT}
+enable_rollouts: true
+
+dataset:
+  cotracker_checkpoint: null
+
+hydra:
+  run:
+    dir: ${output_root}/${algo}/evaluation/${dataset.name}/${seed}
