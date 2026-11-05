@@ -1,8 +1,10 @@
 _target_: models.jopat.JOPAT
-action_len: 16
+action_len: 19
 action_dim: ${dataset.shape_meta.action.shape[0]}
 track_len: 19
 num_points: 625
+future_offset: 16
+future_frames: 2
 obs_encoder:
   _target_: models.jopat.JOPATObservationEncoder
   shape_meta: ${dataset.shape_meta}
@@ -27,11 +29,13 @@ depth: 12
 num_heads: 12
 mlp_ratio: 4
 qkv_bias: true
-num_registers: 24
+num_registers: 8
 num_train_steps: 100
 num_inference_steps: 10
 beta_schedule: squaredcos_cap_v2
 clip_sample: true
-use_track_visibility: false
+use_track_visibility: true
+action_loss_weight: 1.0
+dynamics_loss_weight: 1.0
 coord_loss_weight: 1.0
-vis_loss_weight: 0.5
+vis_loss_weight: 1.0

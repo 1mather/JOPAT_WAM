@@ -11,6 +11,7 @@ import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
+
 from ..utils.batch_processed_buffer import BatchProcessedTrajectoryBuffer
 from ..utils.buffer import CompressedTrajectoryBuffer
 from ..utils.normalizer import LinearNormalizer, NestedDictLinearNormalizer
@@ -42,11 +43,15 @@ class DroidTrackDataset(Dataset):
         cotracker_checkpoint: Optional[str] = None,
         device: str = "cuda",
         offline: bool = True,
-        window_len: int = 19,
+        window_len: int = 21,
+        track_len: int = 19,
+        reference_frame: int = 1,
+        visibility_threshold: float = 0.9,
         grid_size: int = 25,
         cotracker_batch_size: int = 64,
         stride: int = 1,
         obs_num_frames: int = 2,
+        action_free: bool = False,
     ):
         self.name = name
         self.seq_len = seq_len
@@ -57,7 +62,11 @@ class DroidTrackDataset(Dataset):
         self.device = device
         self.offline = offline
         self.window_len = window_len
+        self.track_len = track_len
+        self.reference_frame = reference_frame
+        self.visibility_threshold = visibility_threshold
         self.grid_size = grid_size
+        self.action_free = action_free
         self.cotracker_batch_size = cotracker_batch_size
         self.stride = stride
         self.subepisode_buffer_path = subepisode_buffer_path
@@ -285,6 +294,9 @@ class DroidTrackDataset(Dataset):
                 track_shape=self._track_shape,
                 track_visibility_shape=self._track_visibility_shape,
                 video_key=video_key,
+                track_len=self.track_len,
+                reference_frame=self.reference_frame,
+                visibility_threshold=self.visibility_threshold,
             )
 
         buffer.trim()
@@ -313,6 +325,9 @@ class DroidTrackDataset(Dataset):
 
         data = {k: torch.from_numpy(v) for k, v in data.items()}
         data = unflatten_obs(data)
+        data["action_mask"] = torch.tensor(
+            0 if self.action_free else 1, dtype=torch.bool
+        )
         return data
 
     def get_validation_dataset(self):

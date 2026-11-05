@@ -204,11 +204,14 @@ python -m experiments.jopat.evaluate
 
 ## Configuration notes
 
-- `num_frames=19` is the training sequence length.
-- `obs_num_frames=2` is the observation horizon.
-- `model.action_len=16` is the predicted action horizon.
+- `num_frames=21` is the training sequence length: `o_{t-1:t}`, the action chunk, the two future observations, and the track target.
+- `obs_num_frames=2` is the observation horizon; the last frame is the tracking reference.
+- `model.action_len=19` is the predicted action horizon.
+- `model.track_len=19` is the track horizon, covering frames `t+1` through `t+H_p`; the reference frame is excluded.
+- `model.future_offset=16` is the offset of the predicted future observation window.
 - `model.num_points=625` corresponds to a 25 × 25 query grid.
-- `model.num_registers=24` is the default transformer register count.
+- `model.num_registers=8` is the default transformer register count.
+- `model.use_track_visibility=true` enables the visibility objective.
 - Image and track paths are runtime inputs and must not be committed.
 
 All commands are intended to run from the repository root. To inspect the fully

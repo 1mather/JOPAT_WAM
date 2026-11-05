@@ -37,7 +37,10 @@ class JOPATTrackDataset(RobomimicDataset):
         cotracker_checkpoint: Optional[str] = None,
         device: str = "cuda",
         offline: bool = True,
-        window_len: int = 19,
+        window_len: int = 21,
+        track_len: int = 19,
+        reference_frame: int = 1,
+        visibility_threshold: float = 0.9,
         grid_size: int = 25,
         subepisode_buffer_path: Optional[str] = None,
         use_language: bool = False,
@@ -54,6 +57,9 @@ class JOPATTrackDataset(RobomimicDataset):
         self.device = device
         self.offline = offline
         self.window_len = window_len
+        self.track_len = track_len
+        self.reference_frame = reference_frame
+        self.visibility_threshold = visibility_threshold
         self.grid_size = grid_size
         self.subepisode_buffer_path = subepisode_buffer_path
         self.cotracker_batch_size = cotracker_batch_size
@@ -221,6 +227,9 @@ class JOPATTrackDataset(RobomimicDataset):
                 track_shape=self._track_shape,
                 track_visibility_shape=self._track_visibility_shape,
                 video_key=video_key,
+                track_len=self.track_len,
+                reference_frame=self.reference_frame,
+                visibility_threshold=self.visibility_threshold,
             )
         buffer.trim()
         return buffer

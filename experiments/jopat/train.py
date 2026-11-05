@@ -105,16 +105,21 @@ def process_batch(
     batch: Dict[str, Any],
     obs_horizon: int,
     action_horizon: int,
+    future_offset: int,
+    future_frames: int,
     device: torch.device,
 ) -> Tuple[Dict[str, torch.Tensor], Dict[str, torch.Tensor], torch.Tensor]:
-    action_start = obs_horizon - 1
+    reference_index = obs_horizon - 1
+    action_start = reference_index
     action_end = action_start + action_horizon
+    next_obs_start = reference_index + future_offset
+    next_obs_end = next_obs_start + future_frames
     curr_obs = {
-        key: value[:, : action_start + 1].to(device, non_blocking=True)
+        key: value[:, :reference_index + 1].to(device, non_blocking=True)
         for key, value in batch["obs"].items()
     }
     next_obs = {
-        key: value[:, action_end:].to(device, non_blocking=True)
+        key: value[:, next_obs_start:next_obs_end].to(device, non_blocking=True)
         for key, value in batch["obs"].items()
     }
     action = batch["action"][:, action_start:action_end].to(
@@ -149,50 +154,29 @@ def process_tracks(
     device: torch.device,
     height: int,
     width: int,
-    max_tracks: int,
-    border_fraction: float = 10.0 / 128.0,
+    num_points: int,
 ) -> Optional[torch.Tensor]:
     tracks = batch.get("track")
     if tracks is None:
         return None
 
     tracks = tracks.to(device, non_blocking=True)
-    batch_size, num_frames, num_tracks, num_dims = tracks.shape
+    _, _, num_tracks, _ = tracks.shape
+    if num_tracks != num_points:
+        raise ValueError(
+            f"Expected {num_points} track points, got {num_tracks}."
+        )
+
     coordinate_scale = torch.tensor(
         [width, height], dtype=tracks.dtype, device=device
     )
     normalized = tracks / coordinate_scale * 2.0 - 1.0
 
-    lower = -1.0 + 2.0 * border_fraction
-    upper = 1.0 - 2.0 * border_fraction
-    valid = ((normalized >= lower) & (normalized <= upper)).all(dim=-1)
-    valid = valid.all(dim=1)
-    movement = normalized.std(dim=1).mean(dim=-1)
-    movement = movement.masked_fill(~valid, float("-inf"))
-
-    count = min(max_tracks, num_tracks)
-    scores, indices = torch.topk(movement, k=count, dim=1)
-    if is_main_process() and torch.any(torch.isneginf(scores)):
-        print("Warning: fewer valid tracks than requested; using fallback tracks.")
-
-    gather_indices = indices[:, None, :, None].expand(
-        batch_size, num_frames, count, num_dims
-    )
-    selected = torch.gather(normalized, dim=2, index=gather_indices)
-
     visibility = batch.get("track_visibility")
     if visibility is not None:
         visibility = visibility.to(device, non_blocking=True)
-        visibility_indices = indices[:, None, :].expand(
-            batch_size, num_frames, count
-        )
-        selected_visibility = torch.gather(
-            visibility, dim=2, index=visibility_indices
-        )
-        selected = torch.cat(
-            (selected, selected_visibility.unsqueeze(-1)), dim=-1
-        )
-    return selected
+        return torch.cat((normalized, visibility.unsqueeze(-1)), dim=-1)
+    return normalized
 
 
 def train_one_step(
@@ -210,11 +194,13 @@ def train_one_step(
         batch,
         config.model.obs_encoder.num_frames,
         config.model.action_len,
+        int(config.model.get("future_offset", 16)),
+        int(config.model.get("future_frames", 2)),
         device,
     )
     height, width = get_image_size(batch, config)
-    max_tracks = int(config.model.get("num_points", 625))
-    tracks = process_tracks(batch, device, height, width, max_tracks)
+    num_points = int(config.model.get("num_points", 625))
+    tracks = process_tracks(batch, device, height, width, num_points)
     action_mask = batch.get("action_mask")
     if action_mask is not None:
         action_mask = action_mask.to(device, non_blocking=True)
@@ -429,6 +415,7 @@ def collect_rollouts(
                 else:
                     action = model.sample(observation_tensor)[0]
                     action = action.detach().cpu().numpy()
+                action = action[: int(config.get("execution_prefix", 8))]
                 observation, _, done, info = env.step(action)
 
             successes.append(bool(info.get("success", False)))
@@ -568,6 +555,8 @@ def evaluate(
                 batch,
                 config.model.obs_encoder.num_frames,
                 config.model.action_len,
+                int(config.model.get("future_offset", 16)),
+                int(config.model.get("future_frames", 2)),
                 device,
             )
             height, width = get_image_size(batch, config)

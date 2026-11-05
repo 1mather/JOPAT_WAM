@@ -67,7 +67,7 @@ class MultiViewVideoPatchifier(nn.Module):
 
 
 class QueryBasedTrackPatchifier(nn.Module):
-    """Patchify tracks together with their fixed query coordinates."""
+    """Patchify tracks into spatiotemporal tokens."""
 
     def __init__(
         self,
@@ -99,7 +99,7 @@ class QueryBasedTrackPatchifier(nn.Module):
         self.pT, self.pH, self.pW = pT, pH, pW
 
         self.patch_encoder = nn.Conv3d(
-            in_channels=4,
+            in_channels=2,
             out_channels=embed_dim,
             kernel_size=patch_shape,
             stride=patch_shape,
@@ -113,25 +113,18 @@ class QueryBasedTrackPatchifier(nn.Module):
             nn.Linear(embed_dim // 2, pT * pH * pW),
         )
 
-    def forward(self, tracks, query_positions):
+    def forward(self, tracks):
         """Encode tracks of shape ``(B, T, N, 2)`` as patch tokens."""
-        return self.patchify(tracks, query_positions)
+        return self.patchify(tracks)
 
-    def patchify(self, tracks, query_positions):
-        """Convert query-conditioned tracks to a patch-token sequence."""
+    def patchify(self, tracks):
+        """Convert tracks to a patch-token sequence."""
         B, T, N, C = tracks.shape
         assert N == self.num_points, f"Expected {self.num_points} points, got {N}"
         assert C == 2, f"Expected 2D coordinates, got {C}D"
-        assert query_positions.shape == (B, N, 2), (
-            f"Query positions shape mismatch: {query_positions.shape}"
-        )
-
-        queries = query_positions[:, None, :, :].expand(B, T, N, 2)
-
-        tracks_with_query = torch.cat([queries, tracks], dim=-1)
 
         tracks_grid = rearrange(
-            tracks_with_query,
+            tracks,
             "b t (h w) c -> b c t h w",
             h=self.iH,
             w=self.iW
@@ -342,12 +335,11 @@ class TripleNoisePredictionNet(nn.Module):
         next_obs_t,
         tracks,
         track_t,
-        query_positions,
     ):
         """Predict noise and visibility for the three input modalities."""
         action_embed = self.action_encoder(action)
         next_obs_embed = self.obs_patchifier(next_obs)
-        track_embed = self.track_patchifier(tracks, query_positions)
+        track_embed = self.track_patchifier(tracks)
 
         if len(action_t.shape) == 0:
             action_t = action_t.expand(action.shape[0]).to(
@@ -435,12 +427,16 @@ class JOPAT(nn.Module):
         beta_schedule="squaredcos_cap_v2",
         clip_sample=True,
         use_track_visibility: bool = False,
+        action_loss_weight: float = 1.0,
+        dynamics_loss_weight: float = 1.0,
         coord_loss_weight: float = 1.0,
-        vis_loss_weight: float = 0.5,
+        vis_loss_weight: float = 1.0,
     ):
         """Initialize JOPAT."""
         super().__init__()
 
+        self.action_loss_weight = action_loss_weight
+        self.dynamics_loss_weight = dynamics_loss_weight
         self.coord_loss_weight = coord_loss_weight
         self.vis_loss_weight = vis_loss_weight
         self.action_len = action_len
@@ -538,13 +534,6 @@ class JOPAT(nn.Module):
         next_obs_t = torch.randint(0, self.num_train_steps, (batch_size,), device=device).long()
         noisy_next_obs = self.noise_scheduler.add_noise(next_obs, next_obs_noise, next_obs_t)
 
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
-
         (
             action_noise_pred,
             next_obs_noise_pred,
@@ -558,12 +547,31 @@ class JOPAT(nn.Module):
             next_obs_t,
             noisy_tracks_input,
             track_t,
-            query_positions,
         )
 
-        action_loss = F.mse_loss(action_noise_pred, action_noise)
+        if action_mask is not None:
+            action_per_sample = F.mse_loss(
+                action_noise_pred, action_noise, reduction="none"
+            ).flatten(1).mean(dim=1)
+            mask = action_mask.to(action_per_sample.dtype)
+            action_loss = (action_per_sample * mask).sum() / mask.sum().clamp_min(1.0)
+        else:
+            action_loss = F.mse_loss(action_noise_pred, action_noise)
         dynamics_loss = F.mse_loss(next_obs_noise_pred, next_obs_noise)
-        coord_loss = F.mse_loss(coords_noise_pred, coords_noise)
+
+        if track_vis_gt is not None:
+            coord_weight = torch.where(
+                track_vis_gt > 0.5,
+                torch.ones_like(track_vis_gt),
+                torch.full_like(track_vis_gt, 0.1),
+            )
+            coord_loss = (
+                coord_weight.unsqueeze(-1)
+                * (coords_noise_pred - coords_noise).pow(2)
+            ).sum(dim=-1).mean()
+        else:
+            coord_loss = F.mse_loss(coords_noise_pred, coords_noise)
+
         if self.use_track_visibility and track_vis_gt is not None:
             vis_loss = F.binary_cross_entropy_with_logits(
                 track_regression_pred_visibility,
@@ -573,8 +581,8 @@ class JOPAT(nn.Module):
             vis_loss = track_regression_pred_visibility.sum() * 0.0
 
         loss = (
-            action_loss
-            + dynamics_loss
+            self.action_loss_weight * action_loss
+            + self.dynamics_loss_weight * dynamics_loss
             + self.coord_loss_weight * coord_loss
             + self.vis_loss_weight * vis_loss
         )
@@ -631,13 +639,6 @@ class JOPAT(nn.Module):
         )
 
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
-
         for t in self.noise_scheduler.timesteps:
             (
                 action_noise_pred,
@@ -652,7 +653,6 @@ class JOPAT(nn.Module):
                 t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -688,13 +688,6 @@ class JOPAT(nn.Module):
         )
 
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
-
 
         for t in self.noise_scheduler.timesteps:
             (
@@ -710,7 +703,6 @@ class JOPAT(nn.Module):
                 t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -746,12 +738,6 @@ class JOPAT(nn.Module):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
         action_t = torch.zeros(batch_size, dtype=torch.long, device=obs_feat.device)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 _,
@@ -766,7 +752,6 @@ class JOPAT(nn.Module):
                 t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             next_obs_sample = self.noise_scheduler.step(
@@ -812,12 +797,6 @@ class JOPAT(nn.Module):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
         next_obs_t = torch.zeros(batch_size, dtype=torch.long, device=obs_feat.device)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 action_noise_pred,
@@ -832,7 +811,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_sample,
                 track_t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -862,12 +840,6 @@ class JOPAT(nn.Module):
 
         action_t = self.noise_scheduler.timesteps[0]
         track_t = self.noise_scheduler.timesteps[0]
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 _,
@@ -882,7 +854,6 @@ class JOPAT(nn.Module):
                 t,
                 track_sample,
                 track_t,
-                query_positions,
             )
 
             next_obs_sample = self.noise_scheduler.step(
@@ -912,12 +883,6 @@ class JOPAT(nn.Module):
 
         action_t = self.noise_scheduler.timesteps[0]
         next_obs_t = self.noise_scheduler.timesteps[0]
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 _,
@@ -932,7 +897,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             track_coords_sample = self.noise_scheduler.step(
@@ -961,12 +925,6 @@ class JOPAT(nn.Module):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
 
         next_obs_t = torch.zeros(batch_size, dtype=torch.long, device=obs_feat.device)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 action_noise_pred,
@@ -981,7 +939,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -1015,12 +972,6 @@ class JOPAT(nn.Module):
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         next_obs_t = self.noise_scheduler.timesteps[0]
         track_t = self.noise_scheduler.timesteps[0]
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             action_noise_pred, _, _, _ = self.noise_pred_net(
                 obs_feat,
@@ -1030,7 +981,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_sample,
                 track_t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -1058,12 +1008,6 @@ class JOPAT(nn.Module):
 
         self.noise_scheduler.set_timesteps(self.num_inference_steps)
         next_obs_t = self.noise_scheduler.timesteps[0]
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             (
                 action_noise_pred,
@@ -1078,7 +1022,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_coords_sample,
                 t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(
@@ -1125,12 +1068,6 @@ class JOPAT(nn.Module):
         next_obs_t = self.noise_scheduler.timesteps[0]
 
         track_t = torch.zeros(batch_size, dtype=torch.long, device=obs_feat.device)
-        query_positions = generate_query_positions(
-            num_points=self.num_points,
-            device=obs_feat.device,
-            method='grid'
-        )
-        query_positions = query_positions[None, :, :].expand(batch_size, -1, -1)
         for t in self.noise_scheduler.timesteps:
             action_noise_pred, _, _, _ = self.noise_pred_net(
                 obs_feat,
@@ -1140,7 +1077,6 @@ class JOPAT(nn.Module):
                 next_obs_t,
                 track_sample,
                 track_t,
-                query_positions,
             )
 
             action_sample = self.noise_scheduler.step(

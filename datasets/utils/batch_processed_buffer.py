@@ -311,6 +311,7 @@ class BatchProcessedTrajectoryBuffer:
         self,
         track_shape: tuple[int, ...],
         track_visibility_shape: Optional[tuple[int, ...]],
+        track_len: int,
     ):
         if len(track_shape) != 2 or track_shape[-1] != 2:
             raise ValueError("track_shape must be (num_points, 2).")
@@ -321,16 +322,18 @@ class BatchProcessedTrajectoryBuffer:
             raise ValueError(
                 "track_visibility_shape must match the number of track points."
             )
+        if track_len <= 0:
+            raise ValueError("track_len must be positive.")
 
         track_storage_shape = (
             self.num_windows,
-            self.sequence_length,
+            track_len,
             num_points,
             2,
         )
         visibility_storage_shape = (
             self.num_windows,
-            self.sequence_length,
+            track_len,
             num_points,
         )
 
@@ -422,6 +425,9 @@ class BatchProcessedTrajectoryBuffer:
         track_shape: Optional[tuple[int, ...]] = None,
         track_visibility_shape: Optional[tuple[int, ...]] = None,
         video_key: Optional[str] = None,
+        track_len: Optional[int] = None,
+        reference_frame: int = 1,
+        visibility_threshold: float = 0.9,
     ):
         """Run CoTracker in batches and persist tracks for every window."""
         if batch_size <= 0:
@@ -429,8 +435,20 @@ class BatchProcessedTrajectoryBuffer:
         if track_shape is None:
             raise ValueError("track_shape is required.")
 
+        sequence_length = self.sequence_length
+        if track_len is None:
+            track_len = sequence_length
+        if track_len <= 0 or track_len >= sequence_length:
+            raise ValueError(
+                "track_len must be positive and shorter than the window length."
+            )
+        if reference_frame < 0 or reference_frame + track_len >= sequence_length:
+            raise ValueError(
+                "reference_frame and track_len exceed the window length."
+            )
+
         video_key = self._find_video_key(video_key)
-        self._ensure_track_storage(track_shape, track_visibility_shape)
+        self._ensure_track_storage(track_shape, track_visibility_shape, track_len)
         self._ensure_completion_mask()
 
         track_done = np.array(self.meta["track_done"][:], dtype=bool)
@@ -439,14 +457,13 @@ class BatchProcessedTrajectoryBuffer:
             print("Tracks are already available for every window.")
             return
 
-        sequence_length = self.sequence_length
         num_points = int(track_shape[0])
         zero_track = np.zeros(
-            (sequence_length, num_points, 2),
+            (track_len, num_points, 2),
             dtype=np.float32,
         )
         zero_visibility = np.zeros(
-            (sequence_length, num_points),
+            (track_len, num_points),
             dtype=np.float32,
         )
 
@@ -454,6 +471,21 @@ class BatchProcessedTrajectoryBuffer:
             self.data["track"][window_index] = zero_track
             self.data["track_visibility"][window_index] = zero_visibility
             self.meta["track_done"][window_index] = True
+
+        def to_targets(tracks, visibility, height, width):
+            start = reference_frame + 1
+            end = start + track_len
+            tracks = np.asarray(tracks, dtype=np.float32)[start:end]
+            visibility = np.asarray(visibility, dtype=np.float32)[start:end]
+            visibility = (visibility >= visibility_threshold).astype(np.float32)
+            in_frame = (
+                (tracks[..., 0] >= 0.0)
+                & (tracks[..., 0] <= width - 1)
+                & (tracks[..., 1] >= 0.0)
+                & (tracks[..., 1] <= height - 1)
+            )
+            visibility = visibility * in_frame.astype(np.float32)
+            return tracks, visibility
 
         progress = tqdm(
             total=int(pending_indices.size),
@@ -497,24 +529,27 @@ class BatchProcessedTrajectoryBuffer:
                 .contiguous()
                 .to(device)
             )
+            height, width = int(batch_tensor.shape[-2]), int(batch_tensor.shape[-1])
 
             try:
                 with torch.no_grad():
                     predicted_tracks, predicted_visibility = cotracker_model(
                         batch_tensor,
                         grid_size=grid_size,
-                        grid_query_frame=0,
+                        grid_query_frame=reference_frame,
                     )
                 predicted_tracks = predicted_tracks.cpu().numpy()
                 predicted_visibility = predicted_visibility.cpu().numpy()
                 for result_index, window_index in enumerate(batch_indices):
                     try:
-                        self.data["track"][window_index] = predicted_tracks[
-                            result_index
-                        ]
-                        self.data["track_visibility"][window_index] = (
-                            predicted_visibility[result_index]
+                        tracks, visibility = to_targets(
+                            predicted_tracks[result_index],
+                            predicted_visibility[result_index],
+                            height,
+                            width,
                         )
+                        self.data["track"][window_index] = tracks
+                        self.data["track_visibility"][window_index] = visibility
                         self.meta["track_done"][window_index] = True
                     except (IndexError, TypeError, ValueError) as error:
                         warnings.warn(
@@ -545,12 +580,16 @@ class BatchProcessedTrajectoryBuffer:
                         tracks, visibility = cotracker_model(
                             tensor,
                             grid_size=grid_size,
-                            grid_query_frame=0,
+                            grid_query_frame=reference_frame,
                         )
-                    self.data["track"][window_index] = tracks[0].cpu().numpy()
-                    self.data["track_visibility"][window_index] = (
-                        visibility[0].cpu().numpy()
+                    tracks, visibility = to_targets(
+                        tracks[0].cpu().numpy(),
+                        visibility[0].cpu().numpy(),
+                        height,
+                        width,
                     )
+                    self.data["track"][window_index] = tracks
+                    self.data["track_visibility"][window_index] = visibility
                     self.meta["track_done"][window_index] = True
                 except (IndexError, RuntimeError, TypeError, ValueError) as error:
                     warnings.warn(

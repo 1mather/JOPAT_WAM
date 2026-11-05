@@ -28,7 +28,11 @@ normalize_action: true
 normalize_lowdim: true
 val_ratio: 0.05
 grid_size: 25
-window_len: 19
+window_len: 21
+track_len: 19
+reference_frame: 1
+visibility_threshold: 0.9
 cotracker_batch_size: 64
 stride: 1
+action_free: true
 obs_num_frames: ${obs_num_frames}
