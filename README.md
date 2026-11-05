@@ -1,16 +1,22 @@
 # JOPAT
 
-**JOPAT: Joint Observation–Action Prediction with Auxiliary Tracks**
+**JOPAT: JOint Pixel-And-Track World-Action Model**
 
-This repository contains the anonymous reference implementation of JOPAT for
-double-blind review. JOPAT trains one diffusion transformer to jointly predict
-an action chunk, future visual observations, and dense point trajectories.
-Current observations provide global conditioning, while auxiliary observation
-and track objectives supply predictive supervision during training.
+JOPAT trains one diffusion transformer to jointly predict an action chunk,
+future visual observations, and dense point trajectories. Current observations
+provide global conditioning, while auxiliary observation and track objectives
+supply predictive supervision during training.
 
-The release contains source code and portable configurations only. Datasets,
-checkpoints, generated media, experiment logs, machine-specific launch files,
-and identifying metadata are intentionally excluded.
+This repository contains the reference implementation accompanying the paper
+*Point Tracking Improves World Action Models*. Datasets, checkpoints, generated
+media, experiment logs, and machine-specific launch files are not included.
+
+## Authors
+
+Jiarui Guan, Wenshuai Zhao, Yue Pei, Ziliang Chen, Arno Solin, Juho Kannala
+
+Aalto University, ELLIS Institute Finland, University of Oulu, Sun Yat-sen
+University, Peng Cheng Laboratory, Beihang University
 
 ## Repository layout
 
@@ -122,8 +128,7 @@ CUDA_VISIBLE_DEVICES=0 python -m experiments.jopat.train \
 ```
 
 Outputs are written below `outputs/JOPAT/<dataset>/<experiment>/<seed>/`.
-Weights & Biases logging is disabled by default. Enable it only in a
-non-anonymous environment:
+Weights & Biases logging is disabled by default. Enable it with:
 
 ```bash
 python -m experiments.jopat.train --config-name train \
@@ -131,8 +136,8 @@ python -m experiments.jopat.train --config-name train \
   wandb.project=JOPAT
 ```
 
-Do not place API keys, account names, or team identifiers in configuration
-files. Use the standard local W&B login mechanism when logging is enabled.
+Use the standard local W&B login mechanism when logging is enabled; no
+credentials belong in the configuration files.
 
 ## Fine-tuning and resuming
 
@@ -227,9 +232,24 @@ Run the architecture smoke tests without datasets or pretrained weights:
 python -m unittest discover -s tests -v
 ```
 
-## Anonymous-release policy
+## Citation
 
-The repository contains no author list, affiliations, personal URLs, private
-storage paths, cluster accounts, service credentials, experiment dashboards,
-or identifying development history. Citation metadata and authorship
-information will be added only after the double-blind review period.
+If you find this work useful, please cite:
+
+```bibtex
+@misc{guan2026tracking,
+  title         = {Point Tracking Improves World Action Models},
+  author        = {Jiarui Guan and Wenshuai Zhao and Yue Pei and Ziliang Chen
+                   and Arno Solin and Juho Kannala},
+  year          = {2026},
+  howpublished  = {\url{https://github.com/1mather/JOPAT_WAM}}
+}
+```
+
+## Acknowledgments
+
+This work was supported by the Research Council of Finland (352788, 362407,
+373999, 373780, 362408, and 339730), the Research Council of Finland Flagship
+programme Finnish Center for Artificial Intelligence FCAI, and in part by The
+Major Key Project of PCL (PCL2025A02, PCL2025A17). The authors acknowledge the
+computational resources provided by the Aalto Science-IT project.
