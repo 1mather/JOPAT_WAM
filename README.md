@@ -11,12 +11,7 @@ This repository contains the reference implementation accompanying the paper
 *Point Tracking Improves World Action Models*. Datasets, checkpoints, generated
 media, experiment logs, and machine-specific launch files are not included.
 
-## Authors
 
-Jiarui Guan, Wenshuai Zhao, Yue Pei, Ziliang Chen, Arno Solin, Juho Kannala
-
-Aalto University, ELLIS Institute Finland, University of Oulu, Sun Yat-sen
-University, Peng Cheng Laboratory, Beihang University
 
 ## Repository layout
 
@@ -246,10 +241,4 @@ If you find this work useful, please cite:
 }
 ```
 
-## Acknowledgments
 
-This work was supported by the Research Council of Finland (352788, 362407,
-373999, 373780, 362408, and 339730), the Research Council of Finland Flagship
-programme Finnish Center for Artificial Intelligence FCAI, and in part by The
-Major Key Project of PCL (PCL2025A02, PCL2025A17). The authors acknowledge the
-computational resources provided by the Aalto Science-IT project.
